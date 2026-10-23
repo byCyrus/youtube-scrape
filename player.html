@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!--
+  nexThing YouTube player page. Serve it from the youtube-scrape server
+  (route /player) and open it as /player?id=VIDEO_ID.
+
+  Why it exists: the YouTube embed refuses to play without an http(s)
+  origin/referrer. On Linux and macOS the app runs from tauri://localhost and
+  sends none, so the app frames this page instead and this page frames
+  YouTube with its own https origin.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>nexThing player</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; }
+    p { color: #aaa; font: 13px system-ui, sans-serif; text-align: center; margin-top: 40vh; }
+  </style>
+</head>
+<body>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var id = params.get('id') || '';
+      // Only real YouTube video ids reach the embed URL.
+      if (!/^[A-Za-z0-9_-]{11}$/.test(id)) {
+        var message = document.createElement('p');
+        message.textContent = 'Invalid video id';
+        document.body.appendChild(message);
+        return;
+      }
+      var autoplay = params.get('autoplay') === '0' ? '0' : '1';
+      var frame = document.createElement('iframe');
+      frame.src = 'https://www.youtube-nocookie.com/embed/' + id +
+        '?autoplay=' + autoplay + '&rel=0&playsinline=1&origin=' + encodeURIComponent(location.origin);
+      frame.title = 'YouTube video player';
+      frame.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      frame.allowFullscreen = true;
+      document.body.appendChild(frame);
+    })();
+  </script>
+</body>
+</html>
