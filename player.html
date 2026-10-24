@@ -1,16 +1,17 @@
 <!DOCTYPE html>
 <!--
   nexThing YouTube player page. Serve it from the youtube-scrape server
-  (route /player) and open it as /player?id=VIDEO_ID&list=ID1,ID2,...
+  (route /player) and open it as /player?id=VIDEO_ID.
 
   Why it exists: the YouTube embed refuses to play without an http(s)
   origin/referrer. On Linux and macOS the app runs from tauri://localhost and
   sends none, so the app frames this page instead and this page frames
   YouTube with its own https origin.
 
-  It plays `id`, then the videos after it in `list`, one by one; a video that
-  cannot be embedded is skipped. Each video that starts is reported to the app
-  with postMessage({ type: 'nexthing-youtube', event: 'playing', id }).
+  The app owns the playlist. This page plays one video at a time and talks to
+  the app with postMessage, all messages shaped { type: 'nexthing-youtube', ... }:
+    to the app:   { event: 'playing' | 'ended' | 'error', id }
+    from the app: { cmd: 'load', id }  (plays another video in the same player)
 -->
 <html lang="en">
 <head>
@@ -25,60 +26,72 @@
   </style>
 </head>
 <body>
-  <div id="player"></div>
   <script>
     (function () {
       var VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
       var params = new URLSearchParams(location.search);
-      var id = params.get('id') || '';
+      var current = params.get('id') || '';
       // Only real YouTube video ids reach the player.
-      if (!VIDEO_ID.test(id)) {
+      if (!VIDEO_ID.test(current)) {
         var message = document.createElement('p');
         message.textContent = 'Invalid video id';
-        document.body.replaceChildren(message);
+        document.body.appendChild(message);
         return;
       }
-      var list = (params.get('list') || '').split(',').filter(function (item) { return VIDEO_ID.test(item); }).slice(0, 25);
-      if (list.indexOf(id) < 0) list.unshift(id);
-      var index = list.indexOf(id);
-      var autoplay = params.get('autoplay') === '0' ? 0 : 1;
-      var player;
+      var autoplay = params.get('autoplay') === '0' ? '0' : '1';
+      var player = null;
+      var pending = null;
 
-      function report(videoId) {
+      function report(event) {
         if (window.parent !== window) {
-          window.parent.postMessage({ type: 'nexthing-youtube', event: 'playing', id: videoId }, '*');
+          window.parent.postMessage({ type: 'nexthing-youtube', event: event, id: current }, '*');
         }
       }
 
-      function playNext() {
-        if (index + 1 >= list.length) return;
-        index += 1;
-        player.loadVideoById(list[index]);
-        report(list[index]);
+      function load(id) {
+        current = id;
+        if (player) {
+          player.loadVideoById(id);
+          report('playing');
+        } else {
+          pending = id;
+        }
       }
 
       // The iframe is made here (not by the API) so its permissions are set before it loads.
       var frame = document.createElement('iframe');
       frame.id = 'player';
-      frame.src = 'https://www.youtube-nocookie.com/embed/' + id +
+      frame.src = 'https://www.youtube-nocookie.com/embed/' + current +
         '?enablejsapi=1&autoplay=' + autoplay + '&rel=0&playsinline=1&origin=' + encodeURIComponent(location.origin);
       frame.title = 'YouTube video player';
       frame.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
       frame.referrerPolicy = 'strict-origin-when-cross-origin';
       frame.allowFullscreen = true;
-      document.getElementById('player').replaceWith(frame);
+      document.body.appendChild(frame);
 
       window.onYouTubeIframeAPIReady = function () {
-        player = new YT.Player('player', {
+        new YT.Player('player', {
           events: {
+            onReady: function (event) {
+              player = event.target;
+              if (pending) load(pending);
+              else report('playing');
+            },
             onStateChange: function (event) {
-              if (event.data === YT.PlayerState.ENDED) playNext();
+              if (event.data === YT.PlayerState.ENDED) report('ended');
             },
             // 2: bad id, 5: HTML5 error, 100: removed, 101/150: embedding not allowed.
-            onError: playNext,
+            onError: function () { report('error'); },
           },
         });
       };
+
+      // Commands come only from the app that frames this page.
+      window.addEventListener('message', function (event) {
+        var data = event.data;
+        if (event.source !== window.parent || !data || data.type !== 'nexthing-youtube') return;
+        if (data.cmd === 'load' && typeof data.id === 'string' && VIDEO_ID.test(data.id)) load(data.id);
+      });
 
       var api = document.createElement('script');
       api.src = 'https://www.youtube.com/iframe_api';
